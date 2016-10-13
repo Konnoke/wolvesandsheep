@@ -13,15 +13,12 @@ import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.geom.GeneralPath;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.annotation.Resource;
 
 class PlayerProxy extends Actor {
 
@@ -91,7 +88,7 @@ class PlayerProxy extends Actor {
             track.moveTo(getPixelLocation().x, getPixelLocation().y);
         }
 
-        GameLocation l = player.getLocation();
+        GameLocation l = player.getLocationFast();
         int prev_x = l.x;
         int prev_y = l.y;
 
@@ -103,7 +100,7 @@ class PlayerProxy extends Actor {
         if (player.isGone()) {
             return;
         }
-        GameLocation targetloc = player.getLocation();
+        GameLocation targetloc = player.getLocationFast();
         int target_x = targetloc.x; // getX() + (int) theMove.delta_x;
         int target_y = targetloc.y; // getY() + (int) theMove.delta_y;
 
@@ -166,7 +163,9 @@ class PlayerProxy extends Actor {
 //                }
             }          
             showPath(p, color, null, pt);
-            player.getGameBoard().wasgamegrid.refresh();
+            // wasgamegrid may be null at the end of a round
+            if (player.getGameBoard().wasgamegrid != null)
+                player.getGameBoard().wasgamegrid.refresh();
         }
     }
     /*

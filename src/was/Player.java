@@ -3,6 +3,7 @@ package was;
 import ch.aplu.jgamegrid.Actor;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
@@ -57,10 +58,13 @@ public abstract class Player {
     PlayerProxy playerProxy = null;
     private int isBusyUntilTime = 0; // wolf is eating
     GameBoard gb = null;
-    private int x = 0, y = 0;
+    //private int x = 0, y = 0; // location of this player
+    GameLocation loc = new GameLocation(0,0);
     String team;
     static boolean catchExceptions = false;
     static boolean logToFile = false; // warning, not thread safe
+    static boolean logToNull = false; // warning, not thread safe
+
     PrintStream logstream = null;
     private double totalRunTime = 0.0;
     private long totalRuns = 0;
@@ -81,11 +85,21 @@ public abstract class Player {
      *
      */
     public Player() {
-        if (logToFile) {
+        if (logToFile || logToNull) {
             String filename = "log/" + getClass().getName() + ".log";
 
             try {
-                logstream = new PrintStream(new FileOutputStream(filename, true));
+                if (logToNull) {
+                    logToFile = true;
+                    logstream = new PrintStream(new OutputStream() {
+                        @Override
+                        public void write(int b) {
+                            //DO NOTHING
+                        }
+                    });
+                } else {
+                    logstream = new PrintStream(new FileOutputStream(filename, true));
+                }
             } catch (FileNotFoundException ex) {
                 System.err.println("can't output to " + filename);
 
@@ -250,7 +264,7 @@ public abstract class Player {
         }
         return gb;
     }
-    
+
     /**
      * Get the timeout set for players.
      * Timeout is measured in milliseconds, per move.
@@ -324,8 +338,8 @@ public abstract class Player {
 
         gb.checkPlayerAt(this, x, y);
 
-        this.x = x;
-        this.y = y;
+        this.loc.x = x;
+        this.loc.y = y;
         LOG("player " + this + "new loc: " + new GameLocation(x, y));
     }
 
@@ -338,7 +352,14 @@ public abstract class Player {
         if (!isActive()) {
             throw new RuntimeException("can't call getLocation for inactive players (before board has been initialized)");
         }
-        return new GameLocation(x, y); // copies location
+        return new GameLocation(loc.x, loc.y); // copies location
+    }
+    
+    final GameLocation getLocationFast() {
+        return new GameLocation(loc.x, loc.y); // copies location
+    }
+    final GameLocation getLocationUnsafe() {
+        return loc; // does not copy location
     }
 
     final void keepBusyFor(int steps) {
@@ -420,7 +441,7 @@ public abstract class Player {
                 long dur = (Long) ((threadMXBean.getCurrentThreadCpuTime() - startTime) / 1000); // nanosec to 1000*millisec
                 if (dur > TIMEOUT * 1000) // convert to 1000*millisec
                 {
-                    System.err.println("Warning: player "+getClass().getName()+" takes too long.");
+                    System.err.println("Warning: player " + getClass().getName() + " takes too long.");
                 }
 
                 noteRuntime(dur, fn);
@@ -460,7 +481,7 @@ public abstract class Player {
             }
 
             System.err.println("Player " + getClass().getName() + " timed out " + TIMEOUT + "ms max." + " in function " + reason);
-            Tournament.logPlayerCrash(this.getClass(), ex,gb);
+            Tournament.logPlayerCrash(this.getClass(), ex, gb);
         }
         return null;
     }
@@ -471,38 +492,59 @@ public abstract class Player {
         final Player thePlayer = this;
 
         Object m = null;
-        switch (func) {
-            case MOVE:
-                m = move(); // move is defined by extending class
-                break;
-            case INITIALIZE:
-                initialize(); // move is defined by extending class
-                break;
-            case IS_BEING_EATEN:
-                m = null;
-                if (thePlayer instanceof SheepPlayer) {
-                    ((SheepPlayer) thePlayer).isBeingEaten();
-                }
-                break;
-            case IS_KEEPING_BUSY:
-                m = null;
-                if (thePlayer instanceof WolfPlayer) {
-                    ((WolfPlayer) thePlayer).isKeepingBusy();
-                }
-                break;
-            case WILL_EAT:
-                m = null;
-                if (thePlayer instanceof WolfPlayer) {
-                    ((WolfPlayer) thePlayer).isEating(); // deprecated
-                    ((WolfPlayer) thePlayer).willEatSheep((String) arg);
-                }
-                break;
-            case IS_ATTACKED:
-                m = null;
-                if (thePlayer instanceof WolfPlayer) {
-                    ((WolfPlayer) thePlayer).isAttacked();
-                }
-                break;
+        PrintStream prevErrStream = System.err;
+        PrintStream prevOutStream = System.out;
+
+        try {
+            if (logstream != null && logToFile) {
+                System.setOut(logstream);
+                System.setErr(logstream);
+            }
+
+            switch (func) {
+                case MOVE:
+                    m = move(); // move is defined by extending class
+                    break;
+                case INITIALIZE:
+                    initialize(); // move is defined by extending class
+                    break;
+                case IS_BEING_EATEN:
+                    m = null;
+                    if (thePlayer instanceof SheepPlayer) {
+                        ((SheepPlayer) thePlayer).isBeingEaten();
+                    }
+                    break;
+                case IS_KEEPING_BUSY:
+                    m = null;
+                    if (thePlayer instanceof WolfPlayer) {
+                        ((WolfPlayer) thePlayer).isKeepingBusy();
+                    }
+                    break;
+                case WILL_EAT:
+                    m = null;
+                    if (thePlayer instanceof WolfPlayer) {
+                        ((WolfPlayer) thePlayer).isEating(); // deprecated
+                        ((WolfPlayer) thePlayer).willEatSheep((String) arg);
+                    }
+                    break;
+                case IS_ATTACKED:
+                    m = null;
+                    if (thePlayer instanceof WolfPlayer) {
+                        ((WolfPlayer) thePlayer).isAttacked();
+                    }
+                    break;
+            }
+//        System.out.println(Thread.activeCount()-threadcount);
+//        if (Thread.activeCount() > threadcount)
+//        {
+//            System.out.println("Player may have created a thread.");
+//        }
+        } finally {
+            if (logstream != null && logToFile) {
+                System.setOut(prevOutStream);
+                System.setErr(prevErrStream);
+            }
+
         }
         return m;
 
@@ -582,7 +624,7 @@ public abstract class Player {
         } catch (CancellationException ex) {
         } catch (InterruptedException ex) {
             Logger.getLogger(Tournament.class.getName()).log(Level.SEVERE, null, ex);
-            Tournament.logPlayerCrash(this.getClass(), ex,gb);
+            Tournament.logPlayerCrash(this.getClass(), ex, gb);
             //throw new IllegalGameMoveException("makeMove was interrupted.", p, null);
         } catch (ExecutionException ex) {
 
@@ -590,7 +632,7 @@ public abstract class Player {
 
                 LOG("Player " + this.getClass().getName() + " runtime exception " + ex.getCause());
                 Logger.getLogger(this.getClass().getName()).log(Level.SEVERE, null, ex.getCause());
-                Tournament.logPlayerCrash(this.getClass(), ex.getCause(),gb);
+                Tournament.logPlayerCrash(this.getClass(), ex.getCause(), gb);
                 m = null;
             } else {
                 throw new RuntimeException("Exception in Player " + this.getClass(), ex.getCause());
@@ -617,7 +659,7 @@ public abstract class Player {
             }
 
             System.err.println("Player " + thePlayer.getClass().getName() + " timed out " + TIMEOUT + "ms max." + " in function " + reason);
-            Tournament.logPlayerCrash(this.getClass(), ex,gb);
+            Tournament.logPlayerCrash(this.getClass(), ex, gb);
             //            int[][] availableMoves = (int[][]) board.getFreeCells();
             //            int chosen = random.nextInt(availableMoves.length);
             //            move = availableMoves[chosen];
@@ -702,7 +744,7 @@ public abstract class Player {
                     // String str = "illegal move: too long! " + m + ": " + m.length() + " > " + maxAllowedDistance;
                     //System.err.println(this.getClass() + str);
 
-                    Tournament.logPlayerCrash(this.getClass(), new RuntimeException("illegal move: too long"),gb);
+                    Tournament.logPlayerCrash(this.getClass(), new RuntimeException("illegal move: too long"), gb);
 
                     // trim move
                     // we penalize the player a little by reducing the maxAllowedDistance
@@ -715,14 +757,14 @@ public abstract class Player {
             }
             // keep move inside boundaries
 
-            int tx = x + (int) m.delta_x;
-            int ty = y + (int) m.delta_y;
+            int tx = loc.x + (int) m.delta_x;
+            int ty = loc.y + (int) m.delta_y;
             tx = Math.max(0, tx);
             ty = Math.max(0, ty);
             tx = Math.min(gb.getCols() - 1, tx);
             ty = Math.min(gb.getRows() - 1, ty);
 
-            m = new Move(tx - x, ty - y);
+            m = new Move(tx - loc.x, ty - loc.y);
         }
 
         if (gb.noteMove(this, m)) {
@@ -735,8 +777,7 @@ public abstract class Player {
 
     }
     volatile static boolean isRunningInTournament = false;
-    
-    
+
     /**
      * Get the maximum allowed distance for this player Not available during
      * initialization of the object.

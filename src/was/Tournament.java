@@ -1,8 +1,8 @@
 package was;
 
 import java.io.PrintStream;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
+import java.net.URISyntaxException;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -17,20 +17,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * The Tournament class describes and manages the game tournament. 
- * 
- * This is the main (entry) class.
- * Usage: java -jar WolvesAndSheep.jar -r R -s S -t -e -p -c -q CLASS1 CLASS2 CLASS3 CLASS4 CLASS5 (...)
- *       -r R      == play R repeats of each game.
- *       -s S      == set up scenario no. S (0 or default for random)
- *       -t        == play a tournament of all combinations of players (4 sheep, one wolf)
- *       -e        == ignore player's exceptions
- *       -p        == pause initially if using graphical UI
- *       -c        == do not show the graphical user interface 
- *       -q        == do not print progress info 
- * Example: java -jar WolvesAndSheep.jar -r 10 basic.Wolf basic.Sheep basic.Sheep basic.Sheep basic.Sheep
- * Example for NetBeans (Run, Project Configuration, Arguments): -r 10 basic.Wolf basic.Sheep basic.Sheep basic.Sheep basic.Sheep
- * 
+ * The Tournament class describes and manages the game tournament.
+ *
+ * This is the main (entry) class. See main() function for usage.
+ *
  *
  * @author dr
  */
@@ -46,15 +36,14 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
     static int minNumSheepRequiredToRun = 0;  // run won't start a game otherwise
     static int minNumWolvesRequiredToRun = 0;
     static boolean exitRequested = false;
+    static boolean resetRequested = false;
     static boolean pauseInitially = false;
     static boolean quiet = false;
 
     static void logPlayerMoveAttempt(Class pl, GameBoard g) {
         moveLog.inc(pl.getName() + ".Crash");
         if (g != null && g.scenario != null) {
-            String ss = "Scenario" + g.scenario.toString();
-
-            moveLog.inc(pl.getName() + ".Crash." + ss);
+            moveLog.inc(pl.getName() + ".Crash.Sc" + g.scenario.toString());
         }
 
     }
@@ -65,14 +54,13 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
 //        crashLog.inc(pl.getName() + ".Crash\\" + ex);
 
         if (g != null && g.scenario != null) {
-            String ss = "Scenario" + g.scenario.toString();
-            crashLog.inc(pl.getName() + ".Crash." + ss);
-            crashLog.inc(pl.getName() + ".Crash." + ss + "\\" + ex);
+            crashLog.inc(pl.getName() + ".Crash.Sc" + g.scenario.toString());
+            crashLog.inc(pl.getName() + ".Crash.Sc" + g.scenario.toString() + "\\" + ex);
         }
 
     }
-    volatile static HighScore crashLog = new HighScore().setTitle("crashes");
-    volatile static HighScore moveLog = new HighScore().setTitle("total calls to move()");
+    volatile static HighScore crashLog = new HighScore(1000).setTitle("crashes", "class");
+    volatile static HighScore moveLog = new HighScore(200).setTitle("total calls to move()", "class");
 
     volatile HighScore timing;
     volatile HighScore scenarioTiming;
@@ -81,14 +69,11 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
     volatile HighScore eatingScore;
 
     void initHighScores() {
-        crashLog = new HighScore().setTitle("crashes");
-        moveLog = new HighScore().setTitle("total calls to move()");
-
-        timing = new HighScore();
-        scenarioTiming = new HighScore();
-        highscore = new HighScore();
-        scenarioScore = new HighScore();
-        eatingScore = new HighScore();
+        timing = new HighScore(64);
+        scenarioTiming = new HighScore(64);
+        highscore = new HighScore(64);
+        scenarioScore = new HighScore(64);
+        eatingScore = new HighScore(64);
 
     }
 
@@ -144,6 +129,7 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
      * players. Otherwise, all given players will be added to the game board at
      * once.
      * @param printHighScore print highscore if true.
+     * @param threads number of threads to run in parallel
      * @return resulting Tournament object.
      */
     static public Tournament run(List<Class> playerClasses, int r, boolean ui, int scenario, boolean comb, boolean printHighScore, int threads) {
@@ -202,7 +188,7 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
      * starts the tournament.
      *
      */
-    TreeMap<String, Double> start(boolean printHighscores, int scenario, int repeats, boolean combinations, int threads) {
+    Map<String, Double> start(boolean printHighscores, int scenario, int repeats, boolean combinations, int threads) {
 
 // check players
         int wolves = 0;
@@ -339,7 +325,6 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
 //            if (!quiet) {
 //                logout("Thread " + threadID + ": " + sheepComb.size() + " sheep teams, " + wolvesComb.size() + " wolves, " + repeats + " reps.");
 //            }
-
             for (int r = 0; r < repeats && exitRequested == false; r++) {
 
                 int theSc = scenarioNum;
@@ -353,111 +338,127 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
 
                 for (ArrayList selWolfComb : wolvesComb) {
                     for (ArrayList selSheepComb : sheepComb) {
-                        selectedPlayers = new ArrayList();
 
-                        /* players play in the order in which they are added:
-                         * the last player added plays first.
-                         * 
-                         * In W&S, the wolf will play last.
-                         * The game engine relies on this partially by checking
-                         * for a sheep-attacking-wolf scenario just before 
-                         * executing the wolf's move.
-                         */
-                        selectedPlayers.addAll(selWolfComb);
-                        selectedPlayers.addAll(selSheepComb);
+                        resetRequested = true;
+                        while (resetRequested) {
+                            resetRequested = false;
 
-                        GameBoard board = new GameBoard(scenario, boardUI, 80);
-                        board.wolfEatSheepDelegate = this;
+                            selectedPlayers = new ArrayList();
 
-                        Stack<GameLocation> wolfQueue = new Stack();
-                        Stack<GameLocation> sheepQueue = new Stack();
+                            /* players play in the order in which they are added:
+                             * the last player added plays first.
+                             * 
+                             * In W&S, the wolf will play last.
+                             * The game engine relies on this partially by checking
+                             * for a sheep-attacking-wolf scenario just before 
+                             * executing the wolf's move.
+                             */
+                            selectedPlayers.addAll(selWolfComb);
+                            selectedPlayers.addAll(selSheepComb);
 
-                        scenario.addToBoard(board, wolfQueue, sheepQueue); // add scenario first to occupy these spaces
+                            GameBoard board = new GameBoard(scenario, boardUI, 80);
+                            board.wolfEatSheepDelegate = this;
 
-                        for (Integer i : selectedPlayers) {
+                            Stack<GameLocation> wolfQueue = new Stack();
+                            Stack<GameLocation> sheepQueue = new Stack();
 
-                            Class pclass = players.get(i);
-                            Stack<GameLocation> queue = isWolf(pclass) ? wolfQueue : sheepQueue;
-                            GameLocation initialLocation = queue.empty() ? board.randomEmptyLocation(wolfQueue, sheepQueue) : queue.pop();
+                            scenario.addToBoard(board, wolfQueue, sheepQueue); // add scenario first to occupy these spaces
 
+                            for (Integer i : selectedPlayers) {
 
-                            Player player = PlayerFactory.makePlayerInstance(pclass);
-                            if (player != null) {
+                                Class pclass = players.get(i);
+                                Stack<GameLocation> queue = isWolf(pclass) ? wolfQueue : sheepQueue;
+                                GameLocation initialLocation = queue.empty() ? board.randomEmptyLocation(wolfQueue, sheepQueue) : queue.pop();
 
-                                board.addPlayer(player, initialLocation);
-                            } 
-                            // note use even if player wasn't added (due to crash!)
-                            highscore.noteUse(pclass.getName());
-                            scenarioScore.noteUse("Scenario " + scenario.toString() + "\\" + pclass.getName());
+                                Player player = PlayerFactory.makePlayerInstance(pclass);
+                                if (player != null) {
 
-                            if (teams.get(pclass) == null) {
-                                //logerr(i);
-                                //logerr("WARNING: can't get team for " + players.get(i));
-                            } else {
-                                // note use of player so that team score can be normalized later
-                                highscore.noteUse(teams.get(pclass) + (isWolf(pclass) ? ".WolfTeam" : ".SheepTeam"));
-                            }
-                        }
-
-                        int wolves = 0, sheep = 0;
-
-                        for (Player p : board.players) {
-                            if (p instanceof WolfPlayer) {
-                                wolves++;
-                            }
-                            if (p instanceof SheepPlayer) {
-                                sheep++;
-                            }
-                        }
-
-                        if (sheep >= minNumSheepRequiredToRun && wolves >= minNumWolvesRequiredToRun) {
-                            
-                            if (r == 0 && !quiet) {
-                                synchronized (this) {
-                                    logout("Thread " + threadID + " Scenario " + theSc + ": ");
-                                    logout(board.playerOverviewToString());
+                                    board.addPlayer(player, initialLocation);
                                 }
-                                // board.print();
+                                // note use even if player wasn't added (due to crash!)
+                                highscore.noteUse(pclass.getName());
+                                scenarioScore.noteUse("Scenario " + scenario.toString() + "\\" + pclass.getName());
+
+                                if (teams.get(pclass) == null) {
+                                    //logerr(i);
+                                    //logerr("WARNING: can't get team for " + players.get(i));
+                                } else {
+                                    // note use of player so that team score can be normalized later
+                                    highscore.noteUse(teams.get(pclass) + (isWolf(pclass) ? ".WolfTeam" : ".SheepTeam"));
+                                }
                             }
 
-                            try {
+                            int wolves = 0, sheep = 0;
 
-                                // PLAY THE GAME
-                                Map<Player, int[]> s = board.playGame(pauseInitially);
+                            for (Player p : board.players) {
+                                if (p instanceof WolfPlayer) {
+                                    wolves++;
+                                }
+                                if (p instanceof SheepPlayer) {
+                                    sheep++;
+                                }
+                            }
 
-                                // DONE
-                                for (Map.Entry<Player, int[]> score : s.entrySet()) {
-                                    Class cl = score.getKey().getClass();
-                                    if (score.getKey().isIncludedInHighScore()) {
-                                        highscore.inc(cl.getName(), score.getValue()[0]);
+                            if (sheep >= minNumSheepRequiredToRun && wolves >= minNumWolvesRequiredToRun) {
 
-                                        if (teams.get(cl) != null) { // Pastures etc don't have a team
+                                if (r == 0 && !quiet) {
+                                    synchronized (this) {
+                                        logout("Thread " + threadID + " Scenario " + theSc + ": ");
+                                        logout(board.playerOverviewToString());
+                                    }
+                                    // board.print();
+                                }
 
-                                            highscore.inc(teams.get(cl) + (score.getKey() instanceof WolfPlayer ? ".WolfTeam" : ".SheepTeam"), score.getValue()[0]);
+                                try {
+
+                                    // PLAY THE GAME
+                                    Map<Player, int[]> s = board.playGame(pauseInitially);
+
+                                    // DONE
+                                    for (Map.Entry<Player, int[]> score : s.entrySet()) {
+                                        Class cl = score.getKey().getClass();
+                                        if (score.getKey().isIncludedInHighScore()) {
+
+                                            
+                                            double mrt = score.getKey().meanRunTime(); // in milliseconds
+                                            int scr = score.getValue()[0];
+                                            score.getValue()[0] = 0; // set to 0 to make sure it doesn't get added twice
+
+                                            highscore.inc(cl.getName(), scr);
+                                            // score.noteUse happens earlier
+
+                                            timing.inc(cl.getName(), mrt);
+                                            timing.noteUse(cl.getName());
+
+                                            final String scenPlayStr = "Scenario " + scenario.toString() + "\\" + cl.getName();
+                                            scenarioTiming.inc(scenPlayStr, mrt);
+                                            scenarioTiming.noteUse(scenPlayStr);
+                                            scenarioScore.inc(scenPlayStr, scr);
+
+                                            // for teams
+                                            if (teams.get(cl) != null) { // Pastures etc don't have a team
+
+                                                String tname = teams.get(cl) + (score.getKey() instanceof WolfPlayer ? ".WolfTeam" : ".SheepTeam");
+                                                highscore.inc(tname, scr);
+                                                timing.inc(tname, mrt);
+                                                timing.noteUse(tname);
+                                            }
+
                                         }
-
-                                        timing.inc(cl.getName(), score.getKey().meanRunTime());
-                                        timing.noteUse(cl.getName());
-                                        final String scenPlayStr = "Scenario " + scenario.toString() + "\\" + cl.getName();
-                                        scenarioTiming.inc(scenPlayStr, score.getKey().meanRunTime());
-                                        scenarioTiming.noteUse(scenPlayStr);
-                                        scenarioScore.inc(scenPlayStr, score.getValue()[0]);
-                                        score.getValue()[0] = 0; // set to 0 to make sure it doesn't get added twice
+                                    }
+                                } finally {
+                                    if (printHighscores) {
+                                        //final String ESC = "\033[";
+                                        //System.out.println(ESC + "2J"); 
+                                        highscore.printByCategory(null);
 
                                     }
                                 }
-                            } finally {
-                                if (printHighscores) {
-                                    //final String ESC = "\033[";
-                                    //System.out.println(ESC + "2J"); 
-                                    highscore.printByCategory(null);
-
-                                }
                             }
+                            // for some reason this helps... GC doesn't run that much otherwise.                        
+                            board = null;
+                            // System.gc(); // takes 30% longer
                         }
-                        // for some reason this helps... GC doesn't run that much otherwise.                        
-                        board = null;
-                        System.gc();
                     }
                 }
             }
@@ -490,11 +491,9 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
                         .isAssignableFrom(p)) {
                     logerr(
                             "Error: " + p.getName() + " is not a subtype of was.SheepPlayer or was.WolfPlayer.");
-                } else {
-                    if (PlayerTest.runUnitTest(p, crashLog)) {
-                        highscore.inc(p.getName(), 0.0);
-                        players.add(p);
-                    }
+                } else if (PlayerTest.runUnitTest(p, crashLog)) {
+                    highscore.inc(p.getName(), 0.0);
+                    players.add(p);
                 }
             }
         }
@@ -504,24 +503,42 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
     }
     static String dividerLine = "_______________________________________________________________________________________________________________________________\n\n";
     // static init
-    private static boolean secPolicySet = false;
+    protected static boolean secPolicySet = false;
 
     {
         if (!secPolicySet) {
 
             ClassLoader cl = Tournament.class.getClassLoader();
             java.net.URL policyURL = cl.getResource("sandbox2.policy");
-            System.setProperty("java.security.policy", policyURL.toString());
+
+            System.out.println(policyURL.toString());
+
+            if (!policyURL.toString().contains("!")) {
+                // the following is the correct version
+                // it works on windows
+                // but it fails when loading from a JAR file...
+                // so it can't run on the server
+                // see also: http://stackoverflow.com/questions/22605666/java-access-files-in-jar-causes-java-nio-file-filesystemnotfoundexception
+                try {
+                    System.setProperty("java.security.policy", Paths.get(policyURL.toURI()).toString());
+                } catch (URISyntaxException ex) {
+                    Logger.getLogger(Tournament.class.getName()).log(Level.SEVERE, null, ex);
+                }
+            } else {    // this version will fail on windows
+                // but it runs from jar files
+                System.setProperty("java.security.policy", policyURL.toString());
+            }
+
             SecurityManager sm = new SecurityManager();
             System.setSecurityManager(sm);
             secPolicySet = true;
+
         }
-
     }
-
 
     static final java.io.PrintStream standardSystemOut = System.out;
     static final java.io.PrintStream standardSystemErr = System.err;
+
     synchronized static void logout(String s) {
         PrintStream previousStream = System.out;
         System.setOut(standardSystemOut);
@@ -529,6 +546,7 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
         System.setOut(previousStream);
 
     }
+
     synchronized static void logerr(String s) {
         PrintStream previousStream = System.err;
         System.setErr(standardSystemErr);
@@ -536,6 +554,7 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
         System.setErr(previousStream);
 
     }
+
     public static void main(String args[]) {
 
         try {
@@ -575,14 +594,28 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
 
                     sc = Integer.parseInt(args[i++]);
 
+                } else if ("-X".equals(s)) {
+
+                    secPolicySet = true; // turn off security
+
                 } else if ("-t".equals(s)) {
 
                     tourn = true;
 
+                } else if ("-m".equals(s)) {
+                    long randomSeed = 1L;
+                    try {
+                        randomSeed = Integer.parseInt(args[i]);
+                        i++; // parsing worked
+                    } catch (NumberFormatException e) {
+                        // no number given
+                    }
+                    random.setSeed(randomSeed++);
+                    Scenario.rand.setSeed(randomSeed++);
+                    GameBoard.rand.setSeed(randomSeed++);
+                    Move.rand.setSeed(randomSeed++);
                 } else if ("-p".equals(s)) {
-
                     pauseInitially = true;
-
                 } else if ("--secret".equals(s)) {
 
                     Scenario.useSecretScenarioClass = true;
@@ -603,10 +636,14 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
                 logerr("       -j N      ==> use N threads simultaneously");
                 logerr("       -s S      ==> set up scenario no. S (0 or default for random)");
                 logerr("       -t        ==> play a tournament of all combinations of players (4 sheep, one wolf)");
-                logerr("       -e        ==> catch player's exceptions and timeouts");
+                logerr("       -e        ==> catch and log player's exceptions and timeouts, but keep running.");
+                logerr("                     Log player output to file.  For testing against buggy opponents.");
+                logerr("       -m        ==> use same randomization of initial player positions etc.");
+                logerr("       -m S      ==> use randomization number S for initial player positions etc.");
                 logerr("       -p        ==> pause initially if using graphical UI");
                 logerr("       -c        ==> do not show the graphical user interface ");
                 logerr("       -q        ==> do not print progress info ");
+                logerr("       -x        ==> turn off security (needed for profiling)");
                 logerr("Example: java -jar WolvesAndSheep.jar -r 10 basic.Wolf basic.Sheep basic.Sheep basic.Sheep basic.Sheep");
                 logerr("Example for NetBeans (Run Configuration, Program arguments): -r 10 basic.Wolf basic.Sheep basic.Sheep basic.Sheep basic.Sheep");
                 // do not run a default case to make sure it doesn't cause confusion.
@@ -625,4 +662,5 @@ public class Tournament implements GameBoard.WolfSheepDelegate {
         // keep track
         eatingScore.inc(wolf.getClass().getName() + "\\" + sheep.getClass().getName());
     }
+
 }

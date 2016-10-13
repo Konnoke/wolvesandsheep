@@ -1,9 +1,14 @@
 package was;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -11,6 +16,8 @@ import java.util.SortedSet;
 import java.util.StringTokenizer;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * This class contains hacks. To do: re-write.
@@ -22,19 +29,67 @@ public class HighScore extends TreeMap<String, Double> {
     TreeMap<String, Integer> uses = new TreeMap();
     TreeMap<String, ArrayList<Double>> vals = new TreeMap();
 
-    final int COLUMNWIDTH = 8;
     boolean normalizing = false;  // set to true if noteUse is called once
     boolean trackIndividualValues = false; // true will cause a memory leak
     boolean showCI = false;
+    boolean tabSep = false;
+    String keyHeaderName = "";
+    String extraColumnName = null;
+    String extraColumnValue = null;
+    String unitName = "";
+    boolean printHeader = true;
+    PrintStream out = System.out;
+
     /* Currently, not showing confidence intervals as it would
      be informative only if across players, i.e., aggregating all scenarios.
     
      */
+    private final int outputPrecision = 3;
     public boolean printAsPercentage = false;
     String title = "";
 
-    HighScore setTitle(String t) {
+    public HighScore(int initialCapacity) {
+        //super(initialCapacity);
+    }
+    public HighScore() {
+        //super(128);
+    }
+
+    HighScore setTitle(String t, String keytitle) {
         title = t;
+        keyHeaderName = keytitle;
+        return this;
+    }
+
+    HighScore setExtraColumn(String title, String value) {
+        extraColumnName = title;
+        extraColumnValue = value;
+        return this;
+    }
+
+    HighScore setUnit(String u) {
+        unitName = u;
+        return this;
+    }
+
+    HighScore setOutputFile(String outputCSV) {
+        if (outputCSV == null) {
+            out = System.out;
+            tabSep = false;
+        } else {
+            try {
+                if (new File(outputCSV).exists()) {
+                    // if file (CSV) is already there, presumably
+                    // it's already got a header
+                    printHeader = false;
+                }
+                out = new PrintStream(
+                        new FileOutputStream(outputCSV, true));
+                tabSep = true;
+            } catch (IOException ex) {
+                Logger.getLogger(HighScore.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        }
         return this;
     }
 
@@ -78,6 +133,15 @@ public class HighScore extends TreeMap<String, Double> {
         Integer prev = uses.get(s);
         uses.put(s, new Integer(prev == null ? by : prev + by));
         normalizing = true;
+    }
+
+    public void scale(String key, Double by) {
+        Integer u = uses.get(key);
+        if (u != null) {
+            u = (int) (u * (1.0 / by) + .5);
+            uses.put(key, u);
+
+        }
     }
 
     public double get(String s) {
@@ -138,58 +202,129 @@ public class HighScore extends TreeMap<String, Double> {
     }
     int printAlignment = 20;
 
+    // alignment is for the key on the left (name of item)
     void setAlignment() {
-        printAlignment = 10;
-        for (String k : keySet()) {
-            printAlignment = Math.max(printAlignment, removePrefix(k).length());
+        if (tabSep) {
+            printAlignment = 1;
+        } else {
+            printAlignment = 10;
+            for (String k : keySet()) {
+                printAlignment = Math.max(printAlignment, removePrefix(k).length());
+            }
         }
     }
 
+    // calculate width of a column.  we use the same width for all columns. 
+    int columnWidth() {
+        
+        return 5 + outputPrecision + unitName.length(); // to do, use max. width of actual values (this assumes <10)
+    }
+
     String leftAlign(String s, int a) {
+        if (tabSep) {
+            return s;
+        }
         return (a - s.length() > 0 ? String.format("%" + (a - s.length()) + "s", "") : "")
                 + String.format("%s", s);
     }
 
     String rightAlign(String s, int a) {
+        if (tabSep) {
+            return s;
+        }
         return String.format("%" + a + "s", s);
     }
 
-    synchronized void printHeader(Collection<HighScore> extraColumns) {
-        System.out.printf("\n%" + printAlignment + "s  %s", "", leftAlign(title, COLUMNWIDTH));
-        if (normalizing && showCI) {
-            System.out.printf("%s", leftAlign("CI", COLUMNWIDTH));
+    // formatStr should not print anything but the actual number
+    // so no tabs etc at the end
+    String rightAlign(String formatStr, double n, int a) {
+        String s = String.format(formatStr, n);
+        if (tabSep) {
+            return s;
         }
+        
+        // reduce precision if necessary
+        int outputPrecision2 = outputPrecision;
+        while (s.length()>=a && outputPrecision2 > 0 && s.contains("."))
+        {
+            formatStr = getFormat(--outputPrecision2);
+            s = String.format(formatStr, n);
+        }
+        
+        return String.format("%" + a + "s", s);
+    }
+    synchronized void printHeader(Collection<HighScore> extraColumns) {
+        String t = tabSep ? "\t" : "";
+        out.printf("%s " + t + " %s" + t, leftAlign(keyHeaderName, printAlignment), leftAlign(title, columnWidth()));
+        if (normalizing && showCI) {
+            out.printf("%s" + t, leftAlign("CI", columnWidth()));
+        }
+        
+        if (extraColumnName != null) {
+            out.printf("%s" + t, leftAlign(extraColumnName, extraColumnValue.length()));
+        }
+
 
         if (extraColumns != null) {
             for (HighScore h : extraColumns) {
                 if (h != null) {
-                    System.out.printf("%s", leftAlign(h.title, COLUMNWIDTH));
+                    out.printf("%s" + t, leftAlign(h.title, columnWidth()));
                 }
             }
 
         }
+
+        out.println();
+    }
+
+    // just the actual number.
+    // rightAlign expects no tabs or units etc.
+    String getFormat(int prec) {
+        String format;
+        if (tabSep) {
+            format = "%f";
+        } else {
+            if (normalizing) {
+                format = "%." + prec + "f";
+            } else {
+                format = "%.0f";
+            }
+        }
+        return format;
+    }
+    String getFormat() {
+        return getFormat(outputPrecision);
     }
 
     synchronized public void printKeys(List<String> keys, boolean sorted, Collection<HighScore> extraColumns) {
 
-        String format;
-        if (normalizing) {
-            format = "%.3f";
-        } else {
-            format = "%.0f";
-        }
-
-        if (printAsPercentage) {
-            format += "%%";
+        String t = "";
+        String format = getFormat();
+        String format2;
+        if (tabSep) {
+            format2 = format + "\t";
+            t = "\t";
+        } else
+        {
+            if (printAsPercentage) {
+                format2 = format + "%%";
+            } else
+            {
+                format2 = format + unitName;
+            }
         }
         // sort it
         Collections.sort(keys, new TreeValueComparator());
         for (String k : keys) {
 
-            System.out.print(rightAlign(removePrefix(k), printAlignment) + ": ");
-            System.out.print(rightAlign(String.format(format, getNormalized(k)), COLUMNWIDTH));
+            out.print(rightAlign(removePrefix(k), printAlignment) + (tabSep ? t : ": "));
+            out.print(rightAlign(format2, getNormalized(k) , columnWidth()));
             if (normalizing && showCI) {
-                System.out.print(rightAlign(String.format("+-" + format, getSD(k) * 1.96), COLUMNWIDTH));
+                out.print(rightAlign("+-" + format + t, getSD(k) * 1.96, columnWidth()));
+            }
+            
+            if (extraColumnName != null) {
+                out.printf(extraColumnValue + t);
             }
             if (extraColumns != null) {
                 for (HighScore h : extraColumns) {
@@ -201,13 +336,17 @@ public class HighScore extends TreeMap<String, Double> {
                             if (printAsPercentage) {
                                 n *= 100;
                             }
-                            System.out.print(rightAlign(String.format(format, n), COLUMNWIDTH));
+                            out.print(rightAlign(format2, n, columnWidth()));
+                        } else
+                        {
+                            out.print(rightAlign(""+t, columnWidth()));
                         }
                     }
                 }
 
             }
-            System.out.println();
+
+            out.println();
         }
     }
 
@@ -236,7 +375,7 @@ public class HighScore extends TreeMap<String, Double> {
         Set<String> keys = keySet();
         SortedSet<String> cols = new TreeSet();
         SortedSet<String> rows = new TreeSet();
-        int rowlen = 1;
+        int rowlen = 1, collen = 1;
 
         // categories
         for (String k : keys) {
@@ -247,29 +386,41 @@ public class HighScore extends TreeMap<String, Double> {
             String r = t.nextToken();
             rows.add(r);
             rowlen = Math.max(rowlen, getPackage(r).length());
+
             if (t.hasMoreTokens()) {
-                cols.add(t.nextToken());
+                String c = t.nextToken();
+                cols.add(c);
+                collen = Math.max(collen, getPackage(c).length());
             }
         }
+        if (cols.size() > rows.size()) {
+            printTable(collen, rows, cols);
+        } else {
+            printTable(rowlen, cols, rows);
+        }
+    }
 
+    private void printTable(int rowlen, SortedSet<String> cols, SortedSet<String> rows) {
         // Header line (all column names)
-        System.out.print(rightAlign("", rowlen) + "\t");
+        out.print(rightAlign("", rowlen) + "\t");
         for (String c : cols) {
             String cs = getPackage(c);
-            System.out.print(leftAlign(cs, cs.length()) + "\t");
+            out.print(leftAlign(cs, cs.length()) + "\t");
 
         }
-        System.out.println();
+        out.println();
         for (String r : rows) {
-            System.out.print(rightAlign(getPackage(r), rowlen) + "\t");
+            out.print(rightAlign(getPackage(r), rowlen) + "\t");
             for (String c : cols) {
                 String key = r + "\\" + c;
-                Integer count = (int) get(key);
+                String key2 = c + "\\" + r;
+                // we don't know which one is which...
+                Integer count = (int) (super.get(key) != null ? get(key) : get(key2));
 
-                System.out.print(leftAlign(count.toString(), getPackage(c).length()) + "\t");
+                out.print(leftAlign(count.toString(), getPackage(c).length()) + "\t");
 
             }
-            System.out.println();
+            out.println();
 
         }
     }
@@ -286,7 +437,9 @@ public class HighScore extends TreeMap<String, Double> {
     synchronized void printInternal(Collection<HighScore> extraColumns, boolean byClass) {
 
         setAlignment();
-        printHeader(extraColumns);
+        if (printHeader) {
+            printHeader(extraColumns);
+        }
         Set<String> keys = keySet();
         Map<String, List<String>> cats = new TreeMap(); // categories
         // categories
@@ -308,8 +461,10 @@ public class HighScore extends TreeMap<String, Double> {
         }
         // for each category, print it, sorted
         for (String k : new TreeSet<String>(cats.keySet())) {
-            System.out.println();
-            System.out.println(k + ":");
+            if (!tabSep) {
+                out.println();
+                out.println(k + ":");
+            }
             printKeys(cats.get(k), true, extraColumns);
         }
     }

@@ -15,6 +15,9 @@ import static was.Tournament.quiet;
  */
 public class ClassTournament extends Tournament {
 
+    private static String outputCSV;
+    private static boolean treatMissingPlayersAs0 = true;
+
     static void out(String s) {
         System.out.print(s);
     }
@@ -23,7 +26,7 @@ public class ClassTournament extends Tournament {
         System.out.println(s);
     }
 
-    public static void teamStructureInit(int repeats, int minutes) {
+    public static void teamStructureInit(int repeats, int minutes, int numThreads) {
        String[] sheepteams = new String[]{"Lambchop:aaa,bbb,ccc",  // hegarty probably dropped
             "Splendiferous Sheep:ddd,eee,fff",
             "Team C:ggg,hhh,iii",  // pipkin probably dropped
@@ -37,42 +40,54 @@ public class ClassTournament extends Tournament {
             "Team Wolfenstein:dd,ee,ff",
             "Team C:gg,hh,ii",
             "Meat Eater (Classic):jj,kk,ll,mm"};
-        
-        run(wolves, sheepteams, repeats, minutes);
-
+       
         run(wolves, sheepteams, repeats, minutes, numThreads);
     }
 
     static void run(String[] wolves, String[] sheepteams, int repeats, int minutes, int numThreads) {
 
-        HighScore totalHighscore = new HighScore().setTitle("total");
-        HighScore totalTiming = new HighScore().setTitle("timing");
+        HighScore totalHighscore = new HighScore().setTitle("total", "class");
+        HighScore totalPerformance = new HighScore().setTitle("P/msec", "class"); // points / timing
+        HighScore totalTiming = new HighScore().setTitle("timing", "class").setUnit("ms");
         Map<String, HighScore> scenarioHighScore = new TreeMap();
         Map<String, HighScore> scenarioTiming = new TreeMap();
-        HighScore totalEatingScore = new HighScore().setTitle("eating");
+        HighScore totalEatingScore = new HighScore().setTitle("eating", "class");
+        
+        Map<String, Double> missingPlayerCorrection = new TreeMap();
+        
         for (String player : sheepteams) {
             // each sheep team
             String sheepteam = prefix(player);
             // all sheep
+            int members=0;
             for (Class sh : PlayerFactory.string2classlist(player, ".Sheep")) {
                 teams.put(sh.getName(), sheepteam);
                 teams.put(sh, sheepteam);
+                members++;
             }
+            int missing=0;
             for (String sh : PlayerFactory.string2missingClasslist(player, ".Sheep")) {
                 teams.put(sh, sheepteam);
+                missing++;
             }
+            missingPlayerCorrection.put(sheepteam+".SheepTeam", (Double)((double)(missing+members)/members));
         }
         for (String player : wolves) {
             // each wolf team
             String wolfteam = prefix(player);
             // all wolves
+            int members=0;
             for (Class sh : PlayerFactory.string2classlist(player, ".Wolf")) {
                 teams.put(sh.getName(), wolfteam);
                 teams.put(sh, wolfteam);
+                members++;
             }
+            int missing=0;
             for (String sh : PlayerFactory.string2missingClasslist(player, ".Wolf")) {
                 teams.put(sh, wolfteam);
+                missing++;
             }
+            missingPlayerCorrection.put(wolfteam+".WolfTeam", (Double)((double)(missing+members)/members));
         }
         minNumSheepRequiredToRun = 1;
         minNumWolvesRequiredToRun = 1;
@@ -85,31 +100,39 @@ public class ClassTournament extends Tournament {
         long targetTimeSecs = Math.max(1, minutes * 60); // 10 minutes
         long startTime = System.currentTimeMillis();
         while ((System.currentTimeMillis() - startTime) < targetTimeSecs * 1000) {
-            Scenario.repeatCount+=numThreads;
+            Scenario.repeatCount += numThreads;
             for (String s : sheepteams) {
                 // each sheep team
                 for (String w : wolves) {
                     // each wolf team
                     String wolfteam = prefix(w);
                     List<Class> wolves2 = PlayerFactory.string2classlist(w, ".Wolf");
-                    out("Wolf team:" + wolfteam + ": ");
                     for (Class w2 : wolves2) // for each wolf within a group
                     {
                         List<Class> p = PlayerFactory.string2classlist(s, ".Sheep"); // all sheep
+
+                        // If we do not have four sheep, add a random one
+                        while (p.size()>0 && p.size()<4)
+                        {
+                            p.add(p.get(Tournament.random.nextInt(p.size())));
+                        }
+
                         p.add(w2); // one wolf
+
                         // randomize order of sheep
                         Collections.shuffle(p);
+
                         double avgtimeperrun = 0;
-                        if (runcount > runsPerTournament*.1) {
+                        if (runcount > runsPerTournament * .1) {
                             avgtimeperrun = (System.currentTimeMillis() - startTime) / runcount;
                         }
                         // all scenarios
                         //           List x = Scenario.getParameterValues();
                         // we're running one scenario at a time
                         for (int sp : Scenario.getParameterValues()) {
-                            if (avgtimeperrun > 0 && runsPerTournament>0) {
-                                int runsleft = (((int) (runcount / runsPerTournament)) +1)*runsPerTournament-runcount;
-                                int timeleft = (int) ((runsleft/avgtimeperrun) / 1000.0 / 60.0);
+                            if (avgtimeperrun > 0 && runsPerTournament > 0) {
+                                int runsleft = (((int) (runcount / runsPerTournament)) + 1) * runsPerTournament - runcount;
+                                int timeleft = (int) ((runsleft / avgtimeperrun) / 1000.0 / 60.0);
                                 System.out.printf("running (%s matches run, %s matches per tournament).  %s mins. left\n", runcount, runsPerTournament, timeleft);
                             }
                             runcount++;
@@ -119,11 +142,11 @@ public class ClassTournament extends Tournament {
                             totalHighscore.addHighScore(t.highscore);
                             totalTiming.addHighScore(t.timing);
                             totalEatingScore.addHighScore(t.eatingScore);
-                            
+
                             String ss = Scenario.toString(sp);
                             if (scenarioHighScore.get(ss) == null) {
-                                scenarioHighScore.put(ss, new HighScore().setTitle(ss));
-                                scenarioTiming.put(ss, new HighScore().setTitle(ss));
+                                scenarioHighScore.put(ss, new HighScore().setTitle(ss, "class"));
+                                scenarioTiming.put(ss, new HighScore().setTitle(ss, "class").setUnit("ms"));
                             }
                             scenarioHighScore.get(ss).addHighScore(t.highscore);
                             scenarioTiming.get(ss).addHighScore(t.timing);
@@ -161,7 +184,45 @@ public class ClassTournament extends Tournament {
         }
 
         outln("\n");
+
+        if (treatMissingPlayersAs0)
+        {
+            
+            for (Map.Entry<String,Double> entry : missingPlayerCorrection.entrySet())
+            {
+                totalHighscore.scale(entry.getKey(),1.0/entry.getValue());
+                for (HighScore h : scenarioHighScore.values())
+                {
+                    h.scale(entry.getKey(),1.0/entry.getValue());
+                }
+                
+            }
+        }
+        // calculate total performance
+        
+        for (Map.Entry<String, Double> entry : totalHighscore.entrySet())
+        {
+            double n = totalTiming.get(entry.getKey());  
+            if (n>0)
+            {
+                // total points made divided by total time spent
+                // (rather than the averages)
+                // n (timing) is in milliseconds
+                // we want to record total performance in P/msec
+                totalPerformance.inc(entry.getKey(), (entry.getValue() / n));
+            }
+        }
+        
+        scenarioHighScore.put("P/msec", totalPerformance);
         totalHighscore.printByClass(scenarioHighScore.values());
+        if (outputCSV != null) {
+            String timeString = "" + (int) ((System.currentTimeMillis() / (1000 * 60 * 60)) - 405000);
+            totalHighscore.setExtraColumn("time", timeString);
+            totalHighscore.setOutputFile(outputCSV);
+            totalHighscore.printByClass(scenarioHighScore.values());
+            totalHighscore.setOutputFile(null);
+            
+        }
         out(dividerLine);
         outln("" + Scenario.repeatCount + " tournaments with " + Scenario.gameCount + " games in total played.");
         outln("Time: " + (System.currentTimeMillis() - startTime) / 1000.0 + "s elapsed.");
@@ -193,6 +254,7 @@ public class ClassTournament extends Tournament {
 
         Player.catchExceptions = true;
         Player.logToFile = true;
+        Player.logToNull = true;
         Player.debuggable = false; // enables time-keeping
 
         int r = 1;
@@ -218,22 +280,41 @@ public class ClassTournament extends Tournament {
 
                 numThreads = Integer.parseInt(args[i++]);
 
-            } else if ("--secret".equals(s)) {
+            } else if ("-c".equals(s)) {
+
+                outputCSV = args[i++];
+
+            } else if ("-i".equals(s)) {
+
+                Player.debuggable = true;
+
+            }else if ("-x".equals(s)) {
+
+                Tournament.secPolicySet = true;
+
+            }else if ("--secret".equals(s)) {
 
                 Scenario.useSecretScenarioClass = true;
 
-            } else {
+            } else if (s.startsWith("-")) {
                 System.err.println(s + ": unknown parameter.");
                 printUsage = true;
+            } else {
+                System.err.println(s + ": unknown argument.");
+
             }
         }
 
         if (printUsage) {
-            System.err.println("Usage: java -jar WolvesAndSheep.jar -r R -s S -t -e -p -c -q CLASS1 CLASS2 CLASS3 CLASS4 CLASS5 (...)");
+            System.err.println("Usage: java -jar WolvesAndSheep.jar -r R -d -j --secret");
             //System.err.println("       -t M,N,K  ==> play a M*N board with K sheep.");
             System.err.println("       -r R      ==> play R repeats of each game.");
             System.err.println("       -d M      ==> repeat for at least M minutes.");
-            System.err.println("       -q        ==> do not print progress info ");
+            System.err.println("       -q        ==> do not print progress info (faster)");
+            System.err.println("       -j N      ==> use N threads in parallel ");
+            System.err.println("       -x        ==> turn off security");
+            System.err.println("       -i        ==> run players direct, untimed and without threads (faster)");
+            System.err.println("       -c F      ==> log results, appending to tab-separated file F ");
         }
         teamStructureInit(r, duration, numThreads);
 
